@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event Resource Booking</title>
+<style>
+:root{--bg:#eef1f5;--card:#fff;--ink:#14213d;--mute:#5b6577;--line:#d5dbe5;--ok:#0f766e;--bad:#b42318;--bar:#2f4b8a}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1624;--card:#18223a;--ink:#e8ecf5;--mute:#9aa6bd;--line:#2c3855;--ok:#34d3bf;--bad:#ff8a7a;--bar:#6c8ee0}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Segoe UI",system-ui,sans-serif}
+header{padding:20px 24px 4px}
+h1{margin:0;font:700 26px/1.2 Georgia,serif}
+header p{margin:4px 0 0;color:var(--mute)}
+main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:20px;padding:16px 24px 32px}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+h2{margin:0 0 12px;font:600 17px Georgia,serif}
+label{display:block;margin:10px 0 3px;font-weight:600;font-size:13px}
+input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.res{display:flex;flex-wrap:wrap;gap:6px}
+.res label{display:flex;align-items:center;gap:6px;margin:0;padding:5px 9px;border:1px solid var(--line);border-radius:999px;font-weight:500;cursor:pointer}
+.res input{width:auto}
+.res small{color:var(--mute)}
+button{padding:9px 14px;border:0;border-radius:6px;font:600 14px inherit;cursor:pointer;background:var(--ink);color:var(--card)}
+button.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--bar);outline-offset:2px}
+.btns{display:flex;gap:8px;margin-top:14px}
+#msg{margin-top:14px;padding:12px;border-radius:8px;display:none;border:1px solid var(--line)}
+#msg.ok{display:block;border-color:var(--ok);color:var(--ok)}
+#msg.bad{display:block;border-color:var(--bad)}
+#msg h3{margin:0 0 4px;font-size:15px}
+#msg ul{margin:4px 0 8px;padding-left:18px;color:var(--ink)}
+.sug{display:flex;flex-wrap:wrap;gap:6px}
+.sug button{background:var(--ok);color:#fff}
+.day{display:grid;grid-template-columns:78px 1fr;align-items:center;border-top:1px solid var(--line);min-height:44px}
+.day:first-of-type{border-top:0}
+.dl{font-size:12px;color:var(--mute)}
+.track{position:relative;height:40px;background:linear-gradient(90deg,var(--line) 1px,transparent 1px) 0 0/8.333% 100%}
+.bk{position:absolute;top:3px;height:34px;background:var(--bar);color:#fff;border-radius:5px;padding:2px 5px;font-size:11px;line-height:1.2;overflow:hidden;white-space:nowrap}
+.bk.mine{background:var(--bad);opacity:.85}
+.hours{display:grid;grid-template-columns:78px 1fr;font-size:11px;color:var(--mute)}
+.hours div:last-child{display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<header>
+  <h1>Event Resource Booking</h1>
+  <p>Pick resources and a time. Clashes are caught before you book.</p>
+</header>
+<main>
+  <section>
+    <h2>New booking</h2>
+    <label for="ev">Event name</label><input id="ev" placeholder="e.g. Band Practice">
+    <label for="who">Requested by</label><input id="who" placeholder="e.g. Music Club">
+    <label>Resources</label><div class="res" id="res"></div>
+    <label for="dt">Date</label><input type="date" id="dt" value="2026-10-10">
+    <div class="row">
+      <div><label for="st">Start</label><input type="time" id="st" value="14:00"></div>
+      <div><label for="en">End</label><input type="time" id="en" value="16:00"></div>
+    </div>
+    <div class="btns">
+      <button id="check">Check availability</button>
+      <button class="alt" id="book">Book</button>
+    </div>
+    <label for="demo">Try a demo request</label>
+    <select id="demo"><option value="">Choose…</option></select>
+    <div id="msg" role="status" aria-live="polite"></div>
+  </section>
+  <section>
+    <h2>Calendar, 10–24 Oct</h2>
+    <div class="hours"><div></div><div><span>8 AM</span><span>12 PM</span><span>4 PM</span><span>8 PM</span></div></div>
+    <div id="cal"></div>
+  </section>
+</main>
+<script>
+// Page server se khuli ho (http://localhost:5000) to same address use hoga.
+// Agar index.html seedha double-click se khuli ho to localhost:5000 pe jayega.
+const API = location.protocol === "file:" ? "http://localhost:5000" : "";
+const $ = id => document.getElementById(id);
+let resources = [], demos = [], preview = null;
+
+async function api(path, opts) {
+  const r = await fetch(API + path, opts);
+  return { status: r.status, data: await r.json() };
+}
+const post = (path, body) => api(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+
+function payload() {
+  const d = $("dt").value;
+  return {
+    event_name: $("ev").value.trim(), requester: $("who").value.trim(),
+    resource_ids: [...document.querySelectorAll("#res input:checked")].map(c => +c.value),
+    start: `${d}T${$("st").value}`, end: `${d}T${$("en").value}`
+  };
+}
+function fmt(s) { return new Date(s).toLocaleString("en-IN", {day: "numeric", month: "short", hour: "numeric", minute: "2-digit"}); }
+
+function show(cls, html) { const m = $("msg"); m.className = cls; m.innerHTML = html; }
+
+async function check(thenBook) {
+  const p = payload();
+  try {
+    if (thenBook) {
+      if (!p.event_name) return show("bad", "<h3>Event name needed</h3>Enter a name before booking.");
+      const {status, data} = await post("/bookings", p);
+      if (status === 201) { show("ok", `<h3>Booked</h3>Reserved: ${data.resources_booked.join(", ")}`); preview = null; return loadCal(); }
+      return showResult(data, p);
+    }
+    const {status, data} = await post("/bookings/check", p);
+    if (status !== 200) return show("bad", `<h3>Fix the form</h3>${data.error}`);
+    showResult(data, p);
+  } catch (e) { show("bad", "<h3>Can't reach the server</h3>Check the API address and that the backend is running."); }
+}
+
+function showResult(r, p) {
+  if (r.error) return show("bad", `<h3>Fix the form</h3>${r.error}`);
+  const used = r.resources_checked.join(", ");
+  if (r.ok) { preview = p; loadCal(); return show("ok", `<h3>Free</h3>${used} are available. Press Book to confirm.`); }
+  preview = p; loadCal();
+  const c = r.conflicts.map(x => `<li>${x.resource} is used by ${x.event_name}, ${fmt(x.start)} to ${fmt(x.end)}</li>`).join("");
+  const s = r.suggestions.map((x, i) => `<button data-i="${i}">${fmt(x.start)}</button>`).join("");
+  show("bad", `<h3>Clash found</h3>Checked: ${used}<ul>${c}</ul>${s ? "Free slots nearby:<div class='sug'>" + s + "</div>" : "No free slot in the next 2 weeks."}`);
+  document.querySelectorAll(".sug button").forEach(b => b.onclick = () => {
+    const x = r.suggestions[+b.dataset.i];
+    $("dt").value = x.start.slice(0, 10); $("st").value = x.start.slice(11); $("en").value = x.end.slice(11);
+    check(false);
+  });
+}
+
+async function loadCal() {
+  const cal = $("cal");
+  try {
+    const {data} = await api("/bookings?from=2026-10-10&to=2026-10-24");
+    const all = preview ? [...data, {event_name: "Your request", start: preview.start, end: preview.end, mine: true}] : data;
+    let html = "";
+    for (let i = 0; i < 15; i++) {
+      const day = new Date(2026, 9, 10 + i), key = `2026-10-${String(10 + i).padStart(2, "0")}`;
+      const bars = all.filter(b => b.start.slice(0, 10) === key).map(b => {
+        const m = t => (+t.slice(11, 13)) * 60 + (+t.slice(14, 16));
+        const l = (m(b.start) - 480) / 720 * 100, w = (m(b.end) - m(b.start)) / 720 * 100;
+        const tip = `${b.event_name}${b.resource_names ? " (" + b.resource_names + ")" : ""}`;
+        return `<div class="bk${b.mine ? " mine" : ""}" style="left:${l}%;width:${w}%" title="${tip}">${b.event_name}</div>`;
+      }).join("");
+      html += `<div class="day"><div class="dl">${day.toLocaleDateString("en-IN", {weekday: "short", day: "numeric", month: "short"})}</div><div class="track">${bars}</div></div>`;
+    }
+    cal.innerHTML = html;
+  } catch (e) { cal.textContent = "Can't load bookings. Check the API address."; }
+}
+
+async function init() {
+  $("check").onclick = () => check(false);
+  $("book").onclick = () => check(true);
+  try {
+    resources = (await api("/resources")).data;
+    $("res").innerHTML = resources.map(r =>
+      `<label><input type="checkbox" value="${r.id}"${r.id === 2 ? " checked" : ""}>${r.name}${r.requires_name ? ` <small>+ ${r.requires_name}</small>` : ""}</label>`).join("");
+    demos = (await api("/demo-requests")).data;
+    demos.forEach((d, i) => $("demo").add(new Option(d.event_name, i)));
+    $("demo").onchange = e => {
+      const d = demos[e.target.value]; if (!d) return;
+      $("ev").value = d.event_name; $("who").value = "Demo";
+      document.querySelectorAll("#res input").forEach(c => c.checked = d.resource_ids.includes(+c.value));
+      $("dt").value = d.start.slice(0, 10); $("st").value = d.start.slice(11); $("en").value = d.end.slice(11);
+      check(false);
+    };
+  } catch (e) { show("bad", "<h3>Can't reach the server</h3>Start the backend and set the API address at the top of the script."); }
+  loadCal();
+}
+init();
+</script>
+</body>
+</html>
